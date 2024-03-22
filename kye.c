@@ -19,6 +19,7 @@ struct abuf {
 struct editorConfig {
 	int screenrows;
 	int screencols;
+	int cx, cy;
 
 	struct termios orig_termios;
 }; typedef struct editorConfig editorConfig;
@@ -34,7 +35,7 @@ void err(const char *s) {
   	exit(1);
 }
 
-
+// add data to abuf structure, a dynamic string buffer
 void abAppend(struct abuf *ab, const char *s, int len) {
  	char *new = realloc(ab->b, ab->len + len);
   	if (new == NULL) return;
@@ -177,7 +178,9 @@ void editorProcessKeypress() {
   	}
 }
 
-void initEditor() {
+void ionitEditor() {
+	E.cx = 0;
+	E.cy = 0;
 	if (getWindowSize(&E.screenrows, &E.screencols) == -1) err("getWindowSize");
 }
 
