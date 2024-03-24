@@ -1,2 +1,2 @@
-kye: kye.c
-	$(CC) kye.c -o kye -Wall -Wextra -pedantic -g
+ki: ki.c
+	$(CC) ki.c -o ki -Wall -Wextra -pedantic -g
