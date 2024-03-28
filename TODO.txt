@@ -1,0 +1,13 @@
+Text Editor Tutorial ToDos:
+ 1. Remove abuf struct and find solution with less realloc (or ideally 0)
+ 2. separate command mode and input mode
+ 3. Implement piece table instead of array for rows
+ 4. Fix status bar implementation
+ 5. (lowest priority)
+    Look at the write to file sequence and see if there is a better way of writing with non-blocking techniques, or at least ways
+    of reducing write times by reducing time spent in the blocked state (can we interleave writes?)
+
+    also make it so writing to an unchanged file is non-blocking 
+ 6. Syntax highlighting
+ 7. Searching
+ 8. Keybind for jumping to top/bot of file, end of line, start of line, ctrl+r/l to jump by spaces

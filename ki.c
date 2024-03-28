@@ -476,9 +476,10 @@ void drawRows(abuf * ab) {
 
 void drawStatus(abuf * ab) {
   	char status[80], rstatus[80];
-	int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
+	int len = snprintf(status, sizeof(status), "%.20s - %d lines %s %s",
     	E.filename ? E.filename : "[No Name]", E.numrows,
-    	E.dirty ? "(modified)" : "");
+    	E.dirty ? "(modified)" : "",
+		E.edit ? "(edit)" : "");
   	int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d",
     	E.cy + 1, E.numrows);
   
@@ -713,7 +714,7 @@ int main(int argc, char * argv[]) {
   if (argc >= 2)
   	editorOpen(argv[1]);
 
-  editorSetStatusMessage("HELP: Ctrl-Q = quit");
+  editorSetStatusMessage("HELP: Ctrl-Q = quit\tE = Edit");
 
   while (1) {
     editorRefreshScreen();
