@@ -1,2 +1,2 @@
 ki: ki.c
-	$(CC) ki.c -o ki -Wall -Wextra -pedantic -g
+	$(CC) -g ki.c -o ki -Wall -Wextra -pedantic

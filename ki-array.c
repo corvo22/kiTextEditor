@@ -68,19 +68,6 @@ struct editorConfig {
 	struct termios orig_termios;
 }; typedef struct editorConfig editorConfig;
 
-struct pieceTable {
-	char * original;
-	char * added;
-	node * nodes;
-}; typedef struct pieceTable pieceTable;
-
-struct piece {
-	int start;
-	int len;
-	int * linebreaks;
-	struct piece * next;
-}; typedef struct piece piece;
-
 struct editorConfig E;
 
 /*** prototypes ***/
