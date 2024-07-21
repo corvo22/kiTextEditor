@@ -16,7 +16,8 @@
 
 #define _BSD_SOURCE
 #define _GNU_SOURCE
-#define KI_VERSION "0.0.3"
+#define BUFF_SIZE 1000
+#define KI_VERSION "0.0.4"
 #define KI_TAB_STOP 4
 #define KI_QUIT_TIMES 1
 #define ABUF_INIT {NULL, 0}
@@ -68,26 +69,32 @@ struct editorConfig {
 	struct termios orig_termios;
 }; typedef struct editorConfig editorConfig;
 
-struct pieceTable {
+struct Piece {
+	int start;
+	int end;
+	int bufferType;
+	struct Piece * next;
+	struct Piece * prev;
+}; typedef struct Piece Piece;
+
+struct PieceTable {
+	int bufferIndex;
+	int * lineIndex;
 	char * original;
 	char * added;
-	node * nodes;
-}; typedef struct pieceTable pieceTable;
-
-struct piece {
-	int start;
-	int len;
-	int * linebreaks;
-	struct piece * next;
-}; typedef struct piece piece;
+	Piece * head;
+	Piece * tail;
+}; typedef struct PieceTable PieceTable;
 
 struct editorConfig E;
+int addIndex = -1;
 
 /*** prototypes ***/
 
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt);
+PieceTable * PT;
 
 /*** terminal ***/
 
@@ -201,6 +208,126 @@ int getWindowSize(int *rows, int *cols) {
     *rows = ws.ws_row;
     return 0;
   }
+}
+
+/*** PieceTable Manipulation ***/
+
+Piece * getNewPieceNode(int start, int end, int bufferType, Piece * next, Piece * prev) {
+	Piece * piece = (Piece *)malloc(sizeof(Piece));
+	piece->start = start;
+	piece->end = end;
+	piece->bufferType = bufferType;
+	piece->next = next;
+	piece->prev = prev;
+
+	return piece;
+}
+
+PieceTable * initPieceTable(char * filename) {
+	Piece * newNode;
+	PieceTable * PT = (PieceTable *)malloc(sizeof(PieceTable));
+	PT->head = getNewPieceNode(-1,-1,0, NULL, NULL);
+	PT->tail = getNewPieceNode(-1,-1,0, NULL, NULL);
+	PT->added = (char *)malloc(BUFF_SIZE * sizeof(char));	
+	PT->lineIndex = (int *)malloc(BUFF_SIZE * sizeof(int));
+	PT->bufferIndex = 0;
+
+	FILE *fp = fopen(filename, "r");
+  if (fp) {
+		fseek(fp, 0, SEEK_END);
+		long originalSize = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+	
+		char * originalBuffer = (char *) malloc (sizeof(char) * originalSize);
+		if (originalBuffer) {
+			fread(originalBuffer, 1, originalSize, fp);
+		}
+		fclose(fp);
+
+		int lineCount = -1;
+		for(int i = 0; i < originalSize; i++) {
+			if(originalBuffer[i] == '\n')
+			PT->lineIndex[lineCount++] = i;
+		}
+	
+		PT->original = (char *)malloc(originalSize + 1);
+		newNode = getNewPieceNode(0, originalSize, 0, PT->head, PT->tail);
+	}
+	else {
+		PT->original = "";
+		newNode = getNewPieceNode(0, 0, 0, PT->head, PT->tail);
+	}
+
+	PT->head->next = newNode;
+	PT->tail->prev = newNode;
+	newNode->next = PT->tail;
+	newNode->prev = PT->head;	
+
+	//E.numrows = lineCount + 1;
+
+	return PT;
+}
+
+void insertChar(int pos, char character, PieceTable * PT) {
+	FILE * fp;
+	if(pos < 0)
+		err ("invalid insertion location");
+	fp = fopen("debug", "w");
+	fprintf(fp, "Position: %d", pos);
+	fclose(fp);
+	
+	Piece * curr = PT->head->next;
+	
+	while(curr != NULL) {
+		//inserting on boundary
+		if(pos == curr->start || pos == curr->end) {
+			curr->end = curr->end + 1;
+			curr->next->start = curr->next->start + 1;
+      curr->next->end = curr->next->end + 1;
+
+			if(curr->next->start > curr->next->end) {
+				Piece * temp = curr->next;
+				curr->next->next = curr->next;
+				free(temp);
+			}
+
+			PT->added[addIndex++] = character;
+			return;
+		}
+		
+		// inserting into the middle of a Piece, need to split
+		else if(pos < curr->end && pos > curr->start) {
+
+      Piece * back = getNewPieceNode(curr->start, pos, 1, NULL, NULL);
+      Piece * middle = getNewPieceNode(pos, pos+1, 1, NULL, NULL);
+      Piece * front = getNewPieceNode(pos + 1, curr->end + 1, 1, NULL, NULL);
+			
+      back->next = middle;
+      back->prev = curr->prev;
+      middle->next = front;
+      middle->prev = back;
+      front->next = curr->next;
+      front->prev = middle;
+      
+
+      curr->prev->next = back;
+			curr->next->prev = front;
+			curr->prev = NULL;
+			curr->next = NULL;
+      free(curr);
+			PT->added[addIndex++] = character;
+			return;	
+		}
+		else
+			curr = curr->next;
+	}
+	
+}
+
+void deleteChar(int pos, PieceTable * PT) {
+  // three situations, delete last char in node, delete edge of node, delete mid of node
+  Piece * curr = PT->head->next;
+
 }
 
 /*** row operations ***/
@@ -775,6 +902,7 @@ void editorProcessKeypress() {
 
 			default:
 				editorInsertChar(c);
+				insertChar(E.cx , c , PT);
 				break;
   		}
 
@@ -784,7 +912,7 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
-  E.cx = 0;
+  	E.cx = 0;
 	E.cy = 0;
 	E.rx = 0;
 	E.rowoff = 0;
@@ -803,18 +931,19 @@ void initEditor() {
 }
 
 int main(int argc, char *argv[]) {
-  enableRawMode();
-  initEditor();
-  if (argc >= 2) {
-    editorOpen(argv[1]);
-  }
+  	enableRawMode();
+  	initEditor();
+  	if (argc >= 2) {
+		PT = initPieceTable(argv[1]);
+    	editorOpen(argv[1]);
+  	}
 
-  editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+  	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
-  while (1) {
-    editorRefreshScreen();
-    editorProcessKeypress();
-  }
+  	while (1) {
+    	editorRefreshScreen();
+    	editorProcessKeypress();
+  	}
 
   return 0;
 }

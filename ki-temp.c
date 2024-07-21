@@ -16,6 +16,7 @@
 
 #define _BSD_SOURCE
 #define _GNU_SOURCE
+#define BUFF_SIZE 1000
 #define KI_VERSION "0.0.3"
 #define KI_TAB_STOP 4
 #define KI_QUIT_TIMES 1
@@ -67,6 +68,24 @@ struct editorConfig {
 	time_t statusmsg_time;
 	struct termios orig_termios;
 }; typedef struct editorConfig editorConfig;
+
+struct piece {
+	int offset;
+	int end;
+	int bufferType;
+	char * buffer;
+	struct piece * next;
+	struct piece * prev;
+}; typedef struct piece Piece;
+
+typedef struct PieceTable {
+	int bufferIndex;
+	int * lineIndex;
+	char * original;
+	char * added;
+	Piece * head;
+	Piece * tail;
+} PieceTable;
 
 struct editorConfig E;
 
@@ -190,6 +209,53 @@ int getWindowSize(int *rows, int *cols) {
   }
 }
 
+/*** PieceTable Manipulation ***/
+
+Piece * getNewPieceNode(char * text, int start, int end, int bufferType, Piece * next, Piece * prev) {
+	Piece * piece = (Piece *)malloc(sizeof(Piece));
+	piece->offset = start;
+	piece->end = end;
+	piece->bufferType = bufferType;
+	piece->next = next;
+	piece->prev = prev;
+	piece->buffer = text;
+
+	return piece;
+}
+
+PieceTable * initPieceTable(long originalSize, char * original) {
+	PieceTable * PT = (PieceTable *)malloc(sizeof(PieceTable));
+	PT->head = getNewPieceNode("",-1,-1,0, NULL, NULL);
+	PT->tail = getNewPieceNode("",-1,-1,0, NULL, NULL);
+	PT->added = (char *)malloc(BUFF_SIZE * sizeof(char));	
+	PT->bufferIndex = 0;
+
+	int lineCount = -1;
+	for(int i = 0; i < originalSize; i++) {
+		if(original[i] == '\n')
+			PT->lineIndex[lineCount++] = i;
+	}
+	
+	if (originalSize != 0)
+		PT->original = (char *)malloc(originalSize + 1);
+	else
+		PT->original = (char *)malloc(BUFF_SIZE * sizeof(char));
+	
+	Piece * newNode = getNewPieceNode(original, 0, originalSize, 0, PT->head, PT->tail);
+	PT->head->next = newNode;
+	PT->tail->prev = newNode;
+	newNode->next = PT->tail;
+	newNode->prev = PT->head;	
+
+	E.numrows = lineCount + 1;
+
+	return PT;
+}
+
+void splitNode(Piece * current, PieceTable * PT, int splitIndex) {
+}
+void insertChar(int line, int pos, PieceTable * PT) {
+}
 /*** row operations ***/
 
 int editorRowCxToRx(erow *row, int cx) {
@@ -771,7 +837,7 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
-  E.cx = 0;
+    E.cx = 0;
 	E.cy = 0;
 	E.rx = 0;
 	E.rowoff = 0;
@@ -790,18 +856,20 @@ void initEditor() {
 }
 
 int main(int argc, char *argv[]) {
-  enableRawMode();
-  initEditor();
-  if (argc >= 2) {
-    editorOpen(argv[1]);
-  }
+	enableRawMode();
+	initEditor();
+	if (argc >= 2) {
+		editorOpen(argv[1]);
+	}
 
-  editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+	//PieceTable * PT = initPieceTable(0, "");
+	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
-  while (1) {
-    editorRefreshScreen();
-    editorProcessKeypress();
-  }
 
-  return 0;
+	while (1) {
+    	editorRefreshScreen();
+    	editorProcessKeypress();
+	}
+
+  	return 0;
 }
