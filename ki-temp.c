@@ -17,7 +17,7 @@
 #define _BSD_SOURCE
 #define _GNU_SOURCE
 #define BUFF_SIZE 1000
-#define KI_VERSION "0.0.3"
+#define KI_VERSION "0.0.4"
 #define KI_TAB_STOP 4
 #define KI_QUIT_TIMES 1
 #define ABUF_INIT {NULL, 0}
@@ -50,7 +50,37 @@ struct erow {
 	char * render;
 }; typedef struct erow erow;
 
+struct Node {
+  int newline;
+  int buffer;
+  struct Node * next;
+  struct Node * prev;
+}; typedef struct Node Node;
+
+struct Piece {
+	int start;
+	int end;
+	int bufferType;
+	struct Piece * next;
+	struct Piece * prev;
+}; typedef struct Piece Piece;
+
+struct PieceTable {
+	int bufferIndex;
+  int addIndex;
+  int rowX;
+  int rowY;
+	char * original;
+	char * added;
+  Node * root;
+  Node * current;
+	Piece * head;
+	Piece * tail;
+}; typedef struct PieceTable PieceTable;
+
 struct editorConfig {
+  int location;
+  int max_location;
 	int screenrows;
 	int screencols;
 	int cx, cy;
@@ -67,25 +97,8 @@ struct editorConfig {
 	char statusmsg[80];
 	time_t statusmsg_time;
 	struct termios orig_termios;
+  PieceTable * PT;
 }; typedef struct editorConfig editorConfig;
-
-struct piece {
-	int offset;
-	int end;
-	int bufferType;
-	char * buffer;
-	struct piece * next;
-	struct piece * prev;
-}; typedef struct piece Piece;
-
-typedef struct PieceTable {
-	int bufferIndex;
-	int * lineIndex;
-	char * original;
-	char * added;
-	Piece * head;
-	Piece * tail;
-} PieceTable;
 
 struct editorConfig E;
 
@@ -211,62 +224,268 @@ int getWindowSize(int *rows, int *cols) {
 
 /*** PieceTable Manipulation ***/
 
-Piece * getNewPieceNode(char * text, int start, int end, int bufferType, Piece * next, Piece * prev) {
+Piece * getNewPieceNode(int start, int end, int bufferType) {
 	Piece * piece = (Piece *)malloc(sizeof(Piece));
-	piece->offset = start;
+	piece->start = start;
 	piece->end = end;
 	piece->bufferType = bufferType;
-	piece->next = next;
-	piece->prev = prev;
-	piece->buffer = text;
 
 	return piece;
 }
 
-PieceTable * initPieceTable(long originalSize, char * original) {
+PieceTable * initPieceTable(char * filename) {
+	Piece * newNode;
 	PieceTable * PT = (PieceTable *)malloc(sizeof(PieceTable));
-	PT->head = getNewPieceNode("",-1,-1,0, NULL, NULL);
-	PT->tail = getNewPieceNode("",-1,-1,0, NULL, NULL);
+	PT->head = getNewPieceNode(-1,-1,0);
+	PT->tail = getNewPieceNode(-1,-1,0);
 	PT->added = (char *)malloc(BUFF_SIZE * sizeof(char));	
+  PT->root = (Node *)malloc(sizeof(Node));
+  PT->current = PT->root;
+  PT->root->newline = 0;
+  PT->rowX = 0;
+  PT->rowY = 0;
 	PT->bufferIndex = 0;
+  PT->addIndex = -1;
 
-	int lineCount = -1;
-	for(int i = 0; i < originalSize; i++) {
-		if(original[i] == '\n')
-			PT->lineIndex[lineCount++] = i;
+	FILE *fp = fopen(filename, "r");
+  if (fp) {
+		fseek(fp, 0, SEEK_END);
+		long originalSize = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+	
+    E.max_location = originalSize;
+		char * originalBuffer = (char *) malloc (sizeof(char) * originalSize);
+		if (originalBuffer) {
+			fread(originalBuffer, 1, originalSize, fp);
+		}
+		fclose(fp);
+	
+		PT->original = (char *)malloc(originalSize);
+		newNode = getNewPieceNode(0, originalSize - 1, 0);
 	}
-	
-	if (originalSize != 0)
-		PT->original = (char *)malloc(originalSize + 1);
-	else
-		PT->original = (char *)malloc(BUFF_SIZE * sizeof(char));
-	
-	Piece * newNode = getNewPieceNode(original, 0, originalSize, 0, PT->head, PT->tail);
+	else {
+		PT->original = "";
+		newNode = getNewPieceNode(0, 0, 0);
+	}
+
 	PT->head->next = newNode;
 	PT->tail->prev = newNode;
 	newNode->next = PT->tail;
 	newNode->prev = PT->head;	
 
-	E.numrows = lineCount + 1;
-
 	return PT;
 }
 
-void splitNode(Piece * current, PieceTable * PT, int splitIndex) {
+void insertNewLine() {
+  E.location++;
+  E.max_location++;
+  E.PT->rowY++;
+  E.PT->rowX = 0;
+
+  Node * newnode = (Node *)malloc(sizeof(Node));
+  newnode->newline = E.PT->addIndex;
+  newnode->prev = E.PT->current;
+  newnode->buffer = 1;
+  if(E.PT->current->next) {
+    newnode->next = E.PT->current->next;
+    E.PT->current->next->prev = newnode;
+  }
+  else {
+    newnode->next = NULL;
+  }
+  
+  E.PT->current->next = newnode;
+  E.PT->current = newnode;
 }
-void insertChar(int line, int pos, PieceTable * PT) {
+
+void insertChar(int pos, char character, PieceTable ** PT) {
+	FILE * fp;
+	if(pos < 0)
+		err ("invalid insertion location");
+	fp = fopen("debug", "w");
+	fprintf(fp, "Position: %d", pos);
+	fclose(fp);
+	
+	Piece * curr = (*PT)->head->next;
+  int unified_bot_range = 0;
+  int unified_top_range = 0;
+
+	while(curr != NULL) {
+		// inserting on boundary
+    unified_bot_range = unified_top_range;
+    unified_top_range = unified_top_range + curr->end - curr->start;
+
+		if(pos == unified_bot_range) {
+      // inserting on front boundary always requires creating a new add node
+      (*PT)->addIndex += 1;
+      Piece * newNode = getNewPieceNode((*PT)->addIndex, (*PT)->addIndex+1, 1);
+      newNode->next = curr;
+      newNode->prev = curr->prev;
+      curr->prev->next = newNode;
+      curr->prev = newNode;
+      (*PT)->added[(*PT)->addIndex] = character;
+      return;
+    }
+    if(pos == unified_top_range) {
+      // inserting on end boundary allows extending the existing node if current end is one less
+      // than addIndex and both are add nodes
+      (*PT)->addIndex = (*PT)->addIndex+1;
+      if(curr->bufferType == 1 && curr->end == (*PT)->addIndex) {
+        curr->end++;
+        (*PT)->added[(*PT)->addIndex] = character;
+        return;
+      }
+      else {
+        Piece * newNode = getNewPieceNode((*PT)->addIndex, (*PT)->addIndex+1, 1);
+        newNode->next = curr->next;
+        newNode->prev = curr;
+        curr->next->prev = newNode;
+        curr->next = newNode;
+        (*PT)->added[(*PT)->addIndex] = character;
+        return;
+      }
+
+    }
+		// inserting into the middle of a Piece, need to split
+		else if(pos < unified_top_range && pos > unified_bot_range) {
+      (*PT)->addIndex = (*PT)->addIndex+1;
+
+      Piece * back = getNewPieceNode(curr->start, curr->end - (unified_top_range-pos), curr->bufferType);
+      Piece * middle = getNewPieceNode((*PT)->addIndex, (*PT)->addIndex+1, 1);
+      Piece * front = getNewPieceNode( curr->end - (unified_top_range-pos), curr->end, curr->bufferType);
+			
+      back->next = middle;
+      back->prev = curr->prev;
+      middle->next = front;
+      middle->prev = back;
+      front->next = curr->next;
+      front->prev = middle;
+      
+      curr->prev->next = back;
+			curr->next->prev = front;
+			curr->prev = NULL;
+			curr->next = NULL;
+      free(curr);
+			(*PT)->added[(*PT)->addIndex] = character;
+			return;	
+		}
+		else
+			curr = curr->next;
+	}
+
+  if (character == '\n') {
+    insertNewLine();
+  }
+
 }
+
+void deleteChar(int pos, PieceTable ** PT) {
+  // three situations, delete last char in node, delete edge of node, delete mid of node
+  Piece * curr = (*PT)->head->next;
+  int unified_bot_range = 0;
+  int unified_top_range = 0;
+  
+  if (pos == 0) return;
+  
+  while(curr != NULL) {
+    unified_bot_range = unified_top_range;
+    unified_top_range = unified_top_range + curr->end - curr->start;
+
+    // Deleting off front of node
+    if(pos - 1 == unified_bot_range) {
+      curr->start = curr->start + 1;
+      // delete whole node
+      if (curr->start == curr->end) {
+        curr->prev->next = curr->next;
+        curr->next->prev = curr->prev;
+        curr->next = NULL;
+        curr->prev = NULL;
+        free(curr);
+      }
+      return;
+    }
+    // deleting off end
+    else if (pos == unified_top_range)
+    {
+      curr->end = curr->end - 1;
+      // delete whole node
+      if (curr->start == curr->end) {
+        curr->prev->next = curr->next;
+        curr->next->prev = curr->prev;
+        curr->next = NULL;
+        curr->prev = NULL;
+        free(curr);
+      }
+      return;
+    }
+    // deleting middle, requires splitting node,but not creation of a new one
+    else if(pos < unified_top_range && pos > unified_bot_range) {
+      Piece * back = getNewPieceNode(curr->start, curr->end - (unified_top_range-pos), curr->bufferType);
+      Piece * front = getNewPieceNode(curr->end - (unified_top_range-pos) + 1, curr->end, curr->bufferType);
+
+      back->prev = curr->prev;
+      back->next = front;
+      front->prev = back;
+      front->next = curr->next;
+      curr->next->prev = front;
+      curr->prev->next = back;
+
+      curr->next = NULL;
+      curr->prev = NULL;
+      free(curr);
+      return;
+    }
+    
+    else
+			curr = curr->next;
+  }
+
+}
+
 /*** row operations ***/
 
-int editorRowCxToRx(erow *row, int cx) {
+int editorRowXToRx(Node * row, int rowX) {
   int rx = 0;
   int j;
-  for (j = 0; j < cx; j++) {
-    if (row->chars[j] == '\t')
+  char * buffSource;
+  Piece * curr = E.PT->head->next;
+  /*
+    General outline:
+    1.  Each nl node has the index of the newline AT THE END OF THE LINE 
+        and buffer type, use this to find the right piece (since row may run over multiple pieces)
+
+        The right piece contains the PREVIOUS newline and of the same type
+  
+    2. For i in range rowX: go from start of row with newline (PRevious nl + 1) and check for tabs
+
+    OOOOOOR lets go make life easier and store the nl at the START of the line and 0 for the first.
+   */
+  if(row->buffer)
+    buffSource = E.PT->added;
+  else
+    buffSource = E.PT->original;
+
+  while(curr->next) {
+    if(curr->bufferType == row->buffer && curr->end > row->newline && curr->start <= row->newline)
+      break;
+    else
+      curr = curr->next;
+  }
+
+  for(j = row->newline; j < rowX; j++) {
+    if(j >= curr->end) {
+      curr = curr->next;
+      if(curr->bufferType)
+        buffSource = E.PT->added;
+      else
+        buffSource = E.PT->original;
+    }
+    if(buffSource[j] == '\t')
       rx += (KI_TAB_STOP - 1) - (rx % KI_TAB_STOP);
     rx++;
   }
   return rx;
+
 }
 
 void editorUpdateRow(erow *row) {
@@ -274,7 +493,7 @@ void editorUpdateRow(erow *row) {
   int idx = 0;
   int j;
   for (j = 0; j < row->size; j++)
-    if (row->chars[j] == '\t') tabs++;
+    if (row->chars [j] == '\t') tabs++;
 
   free(row->render);
   row->render = malloc(row->size + tabs*(KI_TAB_STOP - 1) + 1);
@@ -377,6 +596,9 @@ void editorInsertChar(int c) {
 }
 
 void editorInsertNewline() {
+
+  insertChar(E.location, '\n', &E.PT);
+
   if (E.cx == 0) {
     editorInsertRow(E.cy, "", 0);
   } else {
@@ -429,7 +651,11 @@ char *editorRowsToString(int *buflen) {
   return buf;
 }
 
-void editorOpen(char *filename) {
+void editorOpen(char *filename, PieceTable * PT) {
+  int c;
+  int i = 0;
+  Node * current = PT->root;
+
   free(E.filename);
   E.filename = strdup(filename);
 
@@ -448,6 +674,20 @@ void editorOpen(char *filename) {
   }
 
   free(line);
+  fseek(fp, 0, SEEK_SET);
+  while ((c = fgetc(fp)) != EOF) {
+    if(c == 10 || c == 13) {
+      Node * newNode = malloc(sizeof(Node));
+      newNode->newline = i;
+      newNode->prev = current;
+      newNode->next = NULL;
+      current->next = newNode;
+      current = newNode;
+    }
+    i++;
+  }
+  PT->current = PT->root;
+
   fclose(fp);
   E.dirty = 0;
 }
@@ -501,15 +741,19 @@ void abFree(abuf *ab) {
 
 void editorScroll() {
   E.rx = 0;
-  if (E.cy < E.numrows) 
-    E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
-  
+  if (E.PT->rowY < E.numrows) 
+    // We could grab the set of chars from prev nl to next newline. Thatll give us the character 
+    // range we want. For the actual chars, wed need to navigate the piece table till we hit the nth char
 
-  if (E.cy < E.rowoff) 
+    // would it be worth modifying the nl nodes to also include a buffer specificy index? (did this)
+    // since we did that, each nl node has the index and buffer, making this a lot easier to do.
+    E.rx = editorRowXToRx(E.PT->current, E.PT->rowX);
+  
+  if (E.PT->rowY < E.rowoff) 
     E.rowoff = E.cy;
   
-  if (E.cy >= E.rowoff + E.screenrows) 
-    E.rowoff = E.cy - E.screenrows + 1;
+  if (E.PT->rowY >= E.rowoff + E.screenrows) 
+    E.rowoff = E.PT->rowY - E.screenrows + 1;
   
   if (E.rx < E.coloff) 
     E.coloff = E.rx;
@@ -520,7 +764,31 @@ void editorScroll() {
 }
 
 void editorDrawRows(abuf *ab) {
-  int y;
+  /*int y;
+  int filerow;
+  char welcome[80];
+  int welcomelen;
+  int padding;
+  int len;
+
+  Piece * curr = E.PT->head->next;
+  while(curr->next) {
+    char * str;
+    len = curr->end - curr->start;
+    str = (char *)malloc(sizeof(char) * len);
+    
+    if(curr->bufferType)
+      strncpy(str, E.PT->added + curr->start, len);
+    else
+      strncpy(str, E.PT->original + curr->start, len);
+    
+    
+  }
+  abAppend(ab, "abc", 3);
+  abAppend(ab, "\x1b[K", 3);
+  abAppend(ab, "\r\n", 2);
+  */
+ int y;
   int filerow;
   char welcome[80];
   int welcomelen;
@@ -601,10 +869,10 @@ void editorRefreshScreen() {
   abAppend(&ab, "\x1b[H", 3);
 
   editorDrawRows(&ab);
-  editorDrawStatusBar(&ab);
-  editorDrawMessageBar(&ab);
+  //editorDrawStatusBar(&ab);
+  //editorDrawMessageBar(&ab);
 
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1,
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.PT->rowY - E.rowoff) + 1,
                                             (E.rx - E.coloff) + 1);
   abAppend(&ab, buf, strlen(buf));
 
@@ -667,12 +935,26 @@ void editorMoveCursor(int key) {
     case ARROW_LEFT:
       if (E.cx != 0) {
         E.cx--;
+        E.location--;
+        if (E.PT->rowX != 0) E.PT->rowX--;
       } else if (E.cy > 0) {
         E.cy--;
         E.cx = E.row[E.cy].size;
       }
       break;
     case ARROW_RIGHT:
+      if (E.location < E.max_location)
+        E.location++;
+      if (E.PT->current->next) {
+        if (E.PT->rowX < E.PT->current->next->newline) {
+          E.PT->rowX++;
+        }
+      }
+      else {
+        if (E.PT->rowX < E.max_location)
+          E.PT->rowX++;
+      }
+      
       if (row && E.cx < row->size) {
         E.cx++;
       } else if (row && E.cx == row->size) {
@@ -684,10 +966,16 @@ void editorMoveCursor(int key) {
       if (E.cy != 0) {
         E.cy--;
       }
+      if (E.PT->rowY != 0) {
+        E.PT->rowY--;
+        E.PT->current = E.PT->current->prev;
+      }
       break;
     case ARROW_DOWN:
       if (E.cy < E.numrows) {
         E.cy++;
+        E.PT->rowY++;
+        E.PT->current = E.PT->current->next;
       }
       break;
   }
@@ -734,7 +1022,7 @@ void editorProcessKeypress() {
             break;
 
         case HOME_KEY:
-		case CTRL_KEY('a'):
+		    case CTRL_KEY('a'):
             E.cx = 0;
             break;
 
@@ -819,7 +1107,29 @@ void editorProcessKeypress() {
 			case BACKSPACE:
 			case DEL_KEY:
 				if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
-				editorDelChar();
+				deleteChar(E.location, &E.PT);
+        E.location--;
+        if (E.PT->rowX != 0) 
+          E.PT->rowX--;
+        else {
+          if(E.PT->current->prev) {
+            Node * temp = E.PT->current;
+            E.PT->rowX = E.PT->current->newline - E.PT->current->prev->newline;
+            E.PT->current = E.PT->current->prev;
+            E.PT->rowY--;
+            
+            E.PT->current->next = temp->next;
+            temp->next->prev = E.PT->current;
+
+            temp->prev = NULL;
+            temp->next = NULL;
+            free(temp);
+          }
+          else {
+            E.PT->rowX--;
+          }
+        }
+        editorDelChar();
 				break;
 		
 			case '\x1b':
@@ -828,6 +1138,10 @@ void editorProcessKeypress() {
 
 			default:
 				editorInsertChar(c);
+				insertChar(E.location, c , &E.PT);
+        E.location++;
+        E.max_location++;
+        E.PT->rowX++;
 				break;
   		}
 
@@ -837,12 +1151,13 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
-    E.cx = 0;
+  E.cx = 0;
 	E.cy = 0;
 	E.rx = 0;
 	E.rowoff = 0;
 	E.coloff = 0;
 	E.numrows = 0;
+  E.max_location = 0;
 	E.row = NULL;
 	E.cutRow = malloc(sizeof(erow));
 	E.filename = NULL;
@@ -856,20 +1171,20 @@ void initEditor() {
 }
 
 int main(int argc, char *argv[]) {
-	enableRawMode();
-	initEditor();
-	if (argc >= 2) {
-		editorOpen(argv[1]);
-	}
+    // TODO: Convert to using "rows" based on newline rb tree
+  	enableRawMode();
+  	initEditor();
+  	if (argc >= 2) {
+		  E.PT = initPieceTable(argv[1]);
+    	editorOpen(argv[1], E.PT);
+  	}
 
-	//PieceTable * PT = initPieceTable(0, "");
-	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
+  	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit");
 
-
-	while (1) {
+  	while (1) {
     	editorRefreshScreen();
     	editorProcessKeypress();
-	}
+  	}
 
-  	return 0;
+  return 0;
 }

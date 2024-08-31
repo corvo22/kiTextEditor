@@ -52,10 +52,10 @@ struct erow {
 
 struct Node {
   int newline;
-  int buffer;
-
-  struct Node * next;
-  struct Node * prev;
+  int colour;
+  struct Node * parent;
+  struct Node * right;
+  struct Node * left;
 }; typedef struct Node Node;
 
 struct Piece {
@@ -69,12 +69,9 @@ struct Piece {
 struct PieceTable {
 	int bufferIndex;
   int addIndex;
-  int rowX;
-  int rowY;
 	char * original;
 	char * added;
   Node * root;
-  Node * current;
 	Piece * head;
 	Piece * tail;
 }; typedef struct PieceTable PieceTable;
@@ -194,7 +191,7 @@ int editorReadKey() {
 int getCursorPosition(int *rows, int *cols) {
   char buf[32];
   unsigned int i = 0;
-  
+
   if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
 
   while (i < sizeof(buf) - 1) {
@@ -242,8 +239,7 @@ PieceTable * initPieceTable(char * filename) {
 	PT->added = (char *)malloc(BUFF_SIZE * sizeof(char));	
   PT->root = (Node *)malloc(sizeof(Node));
   PT->root->newline = 0;
-  PT->rowX = 0;
-  PT->rowY = 0;
+  PT->root->colour = 0;
 	PT->bufferIndex = 0;
   PT->addIndex = -1;
 
@@ -414,6 +410,112 @@ void deleteChar(int pos, PieceTable ** PT) {
 			curr = curr->next;
   }
 
+}
+
+
+Node* rotateLeft(Node* root, Node* x) {
+    Node* y = x->right;
+    x->right = y->left;
+    if (y->left != NULL) {
+        y->left->parent = x;
+    }
+    y->parent = x->parent;
+    if (x->parent == NULL) {
+        root = y;
+    } else if (x == x->parent->left) {
+        x->parent->left = y;
+    } else {
+        x->parent->right = y;
+    }
+    y->left = x;
+    x->parent = y;
+    return root;
+}
+
+Node* rotateRight(Node* root, Node* x) {
+    Node* y = x->left;
+    x->left = y->right;
+    if (y->right != NULL) {
+        y->right->parent = x;
+    }
+    y->parent = x->parent;
+    if (x->parent == NULL) {
+        root = y;
+    } else if (x == x->parent->right) {
+        x->parent->right = y;
+    } else {
+        x->parent->left = y;
+    }
+    y->right = x;
+    x->parent = y;
+    return root;
+}
+
+Node* fixViolation(Node* root, Node* z) {
+    while (z != root && z->parent->colour == 1) {
+        if (z->parent == z->parent->parent->left) {
+            Node* y = z->parent->parent->right;
+            if (y != NULL && y->colour == 1) {
+                z->parent->colour = 0;
+                y->colour = 0;
+                z->parent->parent->colour = 1;
+                z = z->parent->parent;
+            } else {
+                if (z == z->parent->right) {
+                    z = z->parent;
+                    root = rotateLeft(root, z);
+                }
+                z->parent->colour = 0;
+                z->parent->parent->colour = 1;
+                root = rotateRight(root, z->parent->parent);
+            }
+        } else {
+            Node* y = z->parent->parent->left;
+            if (y != NULL && y->colour == 1) {
+                z->parent->colour = 0;
+                y->colour = 0;
+                z->parent->parent->colour = 1;
+                z = z->parent->parent;
+            } else {
+                if (z == z->parent->left) {
+                    z = z->parent;
+                    root = rotateRight(root, z);
+                }
+                z->parent->colour = 0;
+                z->parent->parent->colour = 1;
+                root = rotateLeft(root, z->parent->parent);
+            }
+        }
+    }
+    root->colour = 0;
+    return root;
+}
+
+Node* insertNode(Node* root, Node* z) {
+    Node* y = NULL;
+    Node* x = root;
+
+    while (x != NULL) {
+        y = x;
+        if (z->newline < x->newline) {
+            x = x->left;
+        } else {
+            x = x->right;
+        }
+    }
+    z->parent = y;
+
+    if (y == NULL) {
+        root = z;
+    } else if (z->newline < y->newline) {
+        y->left = z;
+    } else {
+        y->right = z;
+    }
+    z->colour = 1;
+
+    root = fixViolation(root, z);
+    return root;
 }
 
 /*** row operations ***/
@@ -600,7 +702,7 @@ char *editorRowsToString(int *buflen) {
 void editorOpen(char *filename, PieceTable * PT) {
   int c;
   int i = 0;
-  Node * current = PT->root;
+
 
   free(E.filename);
   E.filename = strdup(filename);
@@ -624,18 +726,11 @@ void editorOpen(char *filename, PieceTable * PT) {
   while ((c = fgetc(fp)) != EOF) {
     if(c == 10 || c == 13) {
       Node * newNode = malloc(sizeof(Node));
-
       newNode->newline = i;
-      newNode->prev = current;
-      newNode->next = NULL;
-      current->next = newNode;
-      current = newNode;
+      PT->root = insertNode(PT->root, newNode);
     }
     i++;
-
   }
-
-  PT->current = PT->root;
 
   fclose(fp);
   E.dirty = 0;

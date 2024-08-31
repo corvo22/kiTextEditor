@@ -1,6 +1,7 @@
 {
     "cmake.configureOnOpen": true,
     "files.associations": {
-        "errno.h": "c"
+        "errno.h": "c",
+        "stdarg.h": "c"
     }
 }
