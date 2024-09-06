@@ -234,6 +234,24 @@ void rightRotate(Piece ** root, Piece * y) {
 
 }
 
+Piece *minValueNode(Piece *node) {
+    while (node->left != NULL)
+        node = node->left;
+    return node;
+}
+
+void replaceNode(Piece **root, Piece *u, Piece *v) {
+    if (u->parent == NULL)
+        *root = v;
+    else if (u == u->parent->left)
+        u->parent->left = v;
+    else
+        u->parent->right = v;
+
+    if (v != NULL)
+        v->parent = u->parent;
+}
+
 void fixViolation(Piece ** root, Piece * node) {
     Piece * parent = NULL;
     Piece * grandparent = NULL;
@@ -301,7 +319,69 @@ void fixViolation(Piece ** root, Piece * node) {
     (*root)->color = BLACK;
 }
 
+void fixDelete(Piece **root, Piece *x) {
+    while (x != *root && x->color == BLACK) {
+        if (x == x->parent->left) {
+            Piece *w = x->parent->right;
+            if (w->color == RED) {
+                w->color = BLACK;
+                x->parent->color = RED;
+                leftRotate(root, x->parent);
+                w = x->parent->right;
+            }
+
+            if (w->left->color == BLACK && w->right->color == BLACK) {
+                w->color = RED;
+                x = x->parent;
+            } else {
+                if (w->right->color == BLACK) {
+                    w->left->color = BLACK;
+                    w->color = RED;
+                    rightRotate(root, w);
+                    w = x->parent->right;
+                }
+                w->color = x->parent->color;
+                x->parent->color = BLACK;
+                w->right->color = BLACK;
+                leftRotate(root, x->parent);
+                x = *root;
+            }
+        } else {
+            Piece *w = x->parent->left;
+            if (w->color == RED) {
+                w->color = BLACK;
+                x->parent->color = RED;
+                rightRotate(root, x->parent);
+                w = x->parent->left;
+            }
+
+            if (w->right->color == BLACK && w->left->color == BLACK) {
+                w->color = RED;
+                x = x->parent;
+            } else {
+                if (w->left->color == BLACK) {
+                    w->right->color = BLACK;
+                    w->color = RED;
+                    leftRotate(root, w);
+                    w = x->parent->left;
+                }
+                w->color = x->parent->color;
+                x->parent->color = BLACK;
+                w->left->color = BLACK;
+                rightRotate(root, x->parent);
+                x = *root;
+            }
+        }
+    }
+    if(x)
+      x->color = BLACK;
+}
+
 void insertPiece(Piece * current, Piece * node) {
+  if(current == NULL) {
+    E.PT->root = node;
+    return;
+  }
   if(current->cumulativeLen < node->cumulativeLen) {
     if(current->right) {
       insertPiece(current->right, node);
@@ -322,8 +402,41 @@ void insertPiece(Piece * current, Piece * node) {
   }
 }
 
+void deletePiece(Piece ** root, Piece * z) {
+  Piece *y = z;
+  Piece *x;
+  int origColor = y->color;
+
+  if (z->left == NULL) {
+      x = z->right;
+      replaceNode(root, z, z->right);
+  } else if (z->right == NULL) {
+      x = z->left;
+      replaceNode(root, z, z->left);
+  } else {
+      y = minValueNode(z->right);
+      origColor = y->color;
+      x = y->right;
+      if (y->parent == z && x != NULL)
+          x->parent = y;
+      else {
+          replaceNode(root, y, y->right);
+          y->right = z->right;
+          if(y->right != NULL)
+            y->right->parent = y;
+      }
+      replaceNode(root, z, y);
+      y->left = z->left;
+      y->left->parent = y;
+      y->color = z->color;
+  }
+
+  if (origColor == BLACK)
+      fixDelete(root, x);
+}
+
 Piece * searchForPiece(int pos, Piece * current) {
-  // Find the smallest node that is larger than or equal to cumLen of current
+  // Find the smallest node that has a cumulativeLen larger than or equal to pos
   Piece * possible;
 
   if(current == NULL)
@@ -345,7 +458,7 @@ Piece * searchForPiece(int pos, Piece * current) {
 
 }
 
-void * updateRightSubtree(Piece * current) {
+void updateRightSubtree(Piece * current) {
   if (current == NULL)
     return;
   else {
@@ -355,18 +468,68 @@ void * updateRightSubtree(Piece * current) {
   }
 }
 
-void * updateCumulativeLengths(int cumulativeLen, Piece * current) {
+void decrementRightSubtree(Piece * current) {
+  if(current == NULL)
+    return;
+  else {
+    current->cumulativeLen--;
+    decrementRightSubtree(current->left);
+    decrementRightSubtree(current->right);
+  }
+}
+
+void inOrderTraversal(Piece *root) {
+    if (root == NULL)
+        return;
+
+    // Traverse the left subtree
+    inOrderTraversal(root->left);
+
+    // Print the current node's data and color
+    printf("cumulative len: %d \r\ncolor: (%s) \r\nstart: %d \r\nlength: %d\r\n\r\n", root->cumulativeLen, (root->color == RED) ? "Red" : "Black", root->start, root->length);
+
+    // Traverse the right subtree
+    inOrderTraversal(root->right);
+}
+
+void updateCumulativeLengths(int cumulativeLen, Piece * current, int recursiveCount) {
   // from the current node, move upwards. If the node has a larger cumulativeLength, update it
   // and its right subtree. Move up again until NULL
 
   if (current == NULL)
     return;
   
+  // special case of the original node is the root or parent smaller than origianl node
+  if ( (current == E.PT->root && recursiveCount == 0) || (current->right && current->right->cumulativeLen > cumulativeLen && recursiveCount == 0) ) {
+    updateRightSubtree(current->right);
+    return;
+  }
+
   if (current->cumulativeLen > cumulativeLen) {
     current->cumulativeLen++;
-    updateRightSubtree(current);
+    updateRightSubtree(current->right);
   }
-  updateCumulativeLengths(cumulativeLen, current->parent);
+  updateCumulativeLengths(cumulativeLen, current->parent, recursiveCount + 1);
+
+}
+
+void decrementCumulativeLengths(int cumulativeLen, Piece * current, int recursiveCount) {
+  // same as above, except subtracting
+
+  if (current == NULL)
+    return;
+  
+  if ( (current == E.PT->root && recursiveCount == 0) || (current->right && current->right->cumulativeLen > cumulativeLen && recursiveCount == 0) ) {
+    decrementRightSubtree(current->right);
+    return;
+  }
+
+  if (current->cumulativeLen > cumulativeLen) {
+    current->cumulativeLen--;
+    decrementRightSubtree(current->right);
+  }
+  decrementCumulativeLengths(cumulativeLen, current->parent, recursiveCount + 1);
+
 
 }
 
@@ -415,7 +578,7 @@ PieceTable * initPieceTable(char * filename) {
     }
 
 		fclose(fp);
-		PT->root = getNewPieceNode(0, 0, originalSize, 0);
+		PT->root = getNewPieceNode(0, originalSize, originalSize, 0);
 	}
 	else {
 		PT->original = "";
@@ -435,13 +598,15 @@ void insertChar(int pos, char character, PieceTable ** PT) {
 	Piece * newNode;
 	Piece * curr = searchForPiece(pos, (*PT)->root);
   
+  (*PT)->max_location++;
+
   if(pos == curr->cumulativeLen - curr->length) {
     // inserting on front boundary always requires creating a new add node
     (*PT)->addIndex += 1;
     newNode = getNewPieceNode((*PT)->addIndex, 1, pos+1, 1);
     insertPiece((*PT)->root, newNode);
     fixViolation(&((*PT)->root), newNode);
-    updateCumulativeLengths(pos+1, newNode);
+    updateCumulativeLengths(pos+1, newNode, 0);
 
     (*PT)->added[(*PT)->addIndex] = character;
     return;
@@ -456,15 +621,16 @@ void insertChar(int pos, char character, PieceTable ** PT) {
       curr->length++;
       curr->cumulativeLen++;
       (*PT)->added[(*PT)->addIndex] = character;
-      updateCumulativeLengths(curr->cumulativeLen, curr);
+      updateCumulativeLengths(curr->cumulativeLen, curr, 0);
       // need to adjust cumulative lengths
       return;
     }
     else {
       // otherwise we need to create a new node
       newNode = getNewPieceNode((*PT)->addIndex, 1, curr->cumulativeLen+1, 1);
+      insertPiece((*PT)->root, newNode);
       fixViolation(&((*PT)->root), newNode);
-      updateCumulativeLengths(pos+1, newNode);
+      updateCumulativeLengths(pos+1, newNode, 0);
       
       (*PT)->added[(*PT)->addIndex] = character;
       return;
@@ -475,80 +641,78 @@ void insertChar(int pos, char character, PieceTable ** PT) {
   else {
     (*PT)->addIndex = (*PT)->addIndex+1;
 
-    //Piece * back = getNewPieceNode(curr->start, curr->end - (unified_top_range-pos), curr->bufferType);
-    //Piece * middle = getNewPieceNode((*PT)->addIndex, (*PT)->addIndex+1, 1);
-    //Piece * front = getNewPieceNode( curr->end - (unified_top_range-pos), curr->end, curr->bufferType);
+    // Piece * getNewPieceNode(int start, int length, int cumulativeLen, int bufferType)
+    int num_before_split = pos - (curr->cumulativeLen - curr->length);
+    int num_after_split = curr->cumulativeLen - pos;
 
-    Piece * back = getNewPieceNode(curr->start, num_before_split, pos, 1);
+    Piece * back = getNewPieceNode(curr->start, num_before_split, pos, curr->bufferType);
     Piece * middle = getNewPieceNode((*PT)->addIndex, 1, pos + 1, 1);
-    Piece * front = getNewPieceNode(curr->start + num_before_split, num_after_split, curr->cumulativeLen+1, 1)
+    Piece * front = getNewPieceNode(curr->start + num_before_split, num_after_split, curr->cumulativeLen, curr->bufferType);
+    
+    
+    deletePiece(&((*PT)->root), curr);
+    insertPiece((*PT)->root, back);
+    fixViolation(&((*PT)->root), back);
+    
+    insertPiece((*PT)->root, middle);
+    fixViolation(&((*PT)->root), middle);
+    
+    insertPiece((*PT)->root, front);
+    fixViolation(&((*PT)->root), front);
+    
+    updateCumulativeLengths(middle->cumulativeLen, middle, 0);
     
     return;	
   }
 }
-/*
+
 void deleteChar(int pos, PieceTable ** PT) {
   // three situations, delete last char in node, delete edge of node, delete mid of node
-  Piece * curr = (*PT)->root->next;
-  int unified_bot_range = 0;
-  int unified_top_range = 0;
-  
+  Piece * curr = searchForPiece(pos, (*PT)->root);
+  Piece * front;
+  Piece * back;
+  (*PT)->max_location--;
   if (pos == 0) return;
-  
-  while(curr != NULL) {
-    unified_bot_range = unified_top_range;
-    unified_top_range = unified_top_range + curr->end - curr->start;
 
-    // Deleting off front of node
-    if(pos - 1 == unified_bot_range) {
-      curr->start = curr->start + 1;
-      // delete whole node
-      if (curr->start == curr->end) {
-        curr->prev->next = curr->next;
-        curr->next->prev = curr->prev;
-        curr->next = NULL;
-        curr->prev = NULL;
-        free(curr);
-      }
-      return;
-    }
-    // deleting off end
-    else if (pos == unified_top_range)
-    {
-      curr->end = curr->end - 1;
-      // delete whole node
-      if (curr->start == curr->end) {
-        curr->prev->next = curr->next;
-        curr->next->prev = curr->prev;
-        curr->next = NULL;
-        curr->prev = NULL;
-        free(curr);
-      }
-      return;
-    }
-    // deleting middle, requires splitting node,but not creation of a new one
-    else if(pos < unified_top_range && pos > unified_bot_range) {
-      Piece * back = getNewPieceNode(curr->start, curr->end - (unified_top_range-pos), curr->bufferType);
-      Piece * front = getNewPieceNode(curr->end - (unified_top_range-pos) + 1, curr->end, curr->bufferType);
+  // delete whole node
+  if(curr->length == 1) {
+    decrementCumulativeLengths(curr->cumulativeLen, curr, 0);
+    deletePiece(&((*PT)->root), curr);
+  }
 
-      back->prev = curr->prev;
-      back->next = front;
-      front->prev = back;
-      front->next = curr->next;
-      curr->next->prev = front;
-      curr->prev->next = back;
+  // delete from end of node
+  else if (pos == curr->cumulativeLen) {
+    curr->length = curr->length - 1;
+    curr->cumulativeLen = curr->cumulativeLen - 1;
+    decrementCumulativeLengths(curr->cumulativeLen, curr, 0);
+  }
+  // delete from start of node
+  else if (pos == curr->cumulativeLen - curr->length) {
+    curr->length = curr->length - 1;
+    curr->cumulativeLen = curr->cumulativeLen - 1;
+    curr->start = curr->start + 1;
+    decrementCumulativeLengths(curr->cumulativeLen, curr, 0);
+  }
 
-      curr->next = NULL;
-      curr->prev = NULL;
-      free(curr);
-      return;
-    }
+  // deleting from middle of node
+  else {
+    int num_before_split = pos - (curr->cumulativeLen - curr->length);
+    int num_after_split = curr->cumulativeLen - pos - 1;
+
+    back = getNewPieceNode(curr->start, num_before_split, pos, curr->bufferType);
+    front = getNewPieceNode(curr->start + num_before_split + 1, num_after_split, curr->cumulativeLen - 1, curr->bufferType);
+
+    deletePiece(&((*PT)->root), curr);
+    insertPiece((*PT)->root, back);
+    fixViolation(&((*PT)->root), back);
     
-    else
-	    curr = curr->next;
+    insertPiece((*PT)->root, front);
+    fixViolation(&((*PT)->root), front);
+    
+    decrementCumulativeLengths(back->cumulativeLen, back, 0);
+    
   }
 }
-*/
 
 /** open/save ***/
 
@@ -583,13 +747,21 @@ void initEditor() {
 int main(int argc, char *argv[]) {
     //NOTE: when displaying text, \n will not get written as \r\n so we will need to handle that
     //      when displaying, look at test.c
-    //TODO: Port keyboard event loop, update insert/delete
+    //      might be an off by one error in pos for delete (easily handled)
+    //TODO: Port keyboard event loop
     
     enableRawMode();
   	initEditor();
   	if (argc >= 2)
 		  E.PT = initPieceTable(argv[1]);
 
+    insertChar(6, 'A', &(E.PT));
+    insertChar(7, 'A', &(E.PT));
+    insertChar(8, 'A', &(E.PT));
+    inOrderTraversal(E.PT->root);
+    deleteChar(7, &(E.PT));
+    inOrderTraversal(E.PT->root);
+    
     abuf ab = ABUF_INIT;
     abAppend(&ab, "\x1b[?25l", 6);
     abAppend(&ab, "\x1b[H", 3);
