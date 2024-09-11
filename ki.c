@@ -194,7 +194,7 @@ int editorReadKey() {
 int getCursorPosition(int *rows, int *cols) {
   char buf[32];
   unsigned int i = 0;
-  
+
   if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
 
   while (i < sizeof(buf) - 1) {
@@ -543,7 +543,6 @@ void editorInsertNewline() {
   E.max_location++;
   Node * newnode = (Node *)malloc(sizeof(Node));
   newnode->newline = E.location;
-  insertNode(E.PT->root, newnode);
 
   if (E.cx == 0) {
     editorInsertRow(E.cy, "", 0);

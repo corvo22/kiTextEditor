@@ -46,8 +46,7 @@ struct abuf {
 }; typedef struct abuf abuf;
 
 struct Node {
-  int newline;
-  int buffer;
+  int len;
 
   struct Node * next;
   struct Node * prev;
@@ -542,13 +541,12 @@ PieceTable * initPieceTable(char * filename) {
 	PT->added = (char *)malloc(BUFF_SIZE * sizeof(char));	
   PT->lineRoot = (Node *)malloc(sizeof(Node));
   current = PT->lineRoot;
-  PT->lineRoot->newline = 0;
+  PT->lineRoot->len = 0;
   PT->rowX = 0;
   PT->rowY = 0;
 	PT->bufferIndex = 0;
   PT->addIndex = -1;
   PT->location = 0;
-  PT->renderX = 0;
 
 	FILE *fp = fopen(filename, "r");
   if (fp) {
@@ -567,11 +565,11 @@ PieceTable * initPieceTable(char * filename) {
       if(c == 10 || c == 13) {
         Node * lineNode = malloc(sizeof(Node));
 
-        lineNode->newline = i;
-        lineNode->prev = current;
-        lineNode->next = NULL;
+        current->len = i;
         current->next = lineNode;
+        lineNode->prev = current;
         current = lineNode;
+        i = 0;
       }
       i++;
 
@@ -586,7 +584,7 @@ PieceTable * initPieceTable(char * filename) {
 	}
 
 	PT->root->color = BLACK;
-	
+	PT->current = PT->lineRoot;
 
 	return PT;
 }
@@ -599,10 +597,20 @@ void insertChar(int pos, char character, PieceTable ** PT) {
 	Piece * curr = searchForPiece(pos, (*PT)->root);
   
   (*PT)->max_location++;
+  (*PT)->addIndex = (*PT)->addIndex+1;
+  
+  // create new lineNode
+  if(character == '\n') {
+    Node * lineNode = (Node *)malloc(sizeof(Node));
+    lineNode->len = 0;
+    lineNode->prev = E.PT->current;
+    lineNode->next = E.PT->current->next;
+    lineNode->next->prev = lineNode;
+    lineNode->prev->next = lineNode;
+  }
 
   if(pos == curr->cumulativeLen - curr->length) {
     // inserting on front boundary always requires creating a new add node
-    (*PT)->addIndex += 1;
     newNode = getNewPieceNode((*PT)->addIndex, 1, pos+1, 1);
     insertPiece((*PT)->root, newNode);
     fixViolation(&((*PT)->root), newNode);
@@ -616,7 +624,6 @@ void insertChar(int pos, char character, PieceTable ** PT) {
   if(pos == curr->cumulativeLen) {
     // inserting on end boundary allows extending the existing node if current end is one less
     // than addIndex and both are add nodes
-    (*PT)->addIndex = (*PT)->addIndex+1;
     if(curr->bufferType == 1 && curr->length + curr->start == (*PT)->addIndex) {
       curr->length++;
       curr->cumulativeLen++;
@@ -639,7 +646,6 @@ void insertChar(int pos, char character, PieceTable ** PT) {
   }
   // inserting into the middle of a Piece, need to split
   else {
-    (*PT)->addIndex = (*PT)->addIndex+1;
 
     // Piece * getNewPieceNode(int start, int length, int cumulativeLen, int bufferType)
     int num_before_split = pos - (curr->cumulativeLen - curr->length);
@@ -661,7 +667,8 @@ void insertChar(int pos, char character, PieceTable ** PT) {
     fixViolation(&((*PT)->root), front);
     
     updateCumulativeLengths(middle->cumulativeLen, middle, 0);
-    
+    (*PT)->added[(*PT)->addIndex] = character;
+
     return;	
   }
 }
@@ -671,9 +678,21 @@ void deleteChar(int pos, PieceTable ** PT) {
   Piece * curr = searchForPiece(pos, (*PT)->root);
   Piece * front;
   Piece * back;
+  int charPos = curr->start + pos - curr->start;
   (*PT)->max_location--;
   if (pos == 0) return;
 
+
+  if( (curr->bufferType && (*PT)->added[charPos] == '\n') || (curr->bufferType == 0 && (*PT)->original[charPos] == '\n') ) {
+    Node * copy = (*PT)->current;
+    (*PT)->current->prev->len = (*PT)->current->prev->len + (*PT)->current->len;
+    (*PT)->current->prev->next = (*PT)->current->next;
+    (*PT)->current->next->prev = (*PT)->current->prev;
+    (*PT)->current = (*PT)->current->prev;
+    copy->next = NULL;
+    copy->prev = NULL;
+    free(copy);
+  }
   // delete whole node
   if(curr->length == 1) {
     decrementCumulativeLengths(curr->cumulativeLen, curr, 0);
@@ -744,11 +763,168 @@ void initEditor() {
 	E.screenrows -= 2;
 }
 
+void editorAddChars(abuf * ab, Piece * curr) {
+  char * start;
+  char * end;
+  char * substr;
+  
+  if (curr == NULL)
+        return;
+
+  // Traverse the left subtree
+  editorAddChars(ab, curr->left);
+
+  // add chars in piece to ab
+  if(curr->bufferType) {
+    // append buff
+    start = &(E.PT->added[curr->start]);
+    end = &(E.PT->added[curr->start + curr->length]);
+  }
+  else {
+    // orig buff
+    start = &(E.PT->original[curr->start]);
+    end = &(E.PT->original[curr->start + curr->length]);
+  }
+  // merge
+  substr = (char *)calloc(1, end - start);
+  memcpy(substr, start, end - start);
+  abAppend(ab, substr, curr->start + curr->length);
+
+  // Traverse the right subtree
+  editorAddChars(ab, curr->right);
+}
+
+void editorRefreshScreen() {
+  abuf ab = ABUF_INIT;
+  char buf[32];
+
+  disableRawMode();
+  abAppend(&ab, "\x1b[?25l", 6);
+  abAppend(&ab, "\x1b[H", 3);
+
+  editorAddChars(&ab, E.PT->root);
+  
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.PT->rowY + 1, E.PT->rowX + 1);
+  abAppend(&ab, buf, strlen(buf));
+  abAppend(&ab, "\x1b[?25h", 6);
+
+  write(STDOUT_FILENO, ab.b, ab.len);
+  abFree(&ab);
+  enableRawMode();
+}
+
+int editorReadKey() {
+  int nread;
+  char c;
+  char seq[3];
+  
+  while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
+    if (nread == -1 && errno != EAGAIN) err("read");
+  }
+
+  if (c == '\x1b') {
+
+    if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+    if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+    if (seq[0] == '[') {
+      if (seq[1] >= '0' && seq[1] <= '9') {
+        if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+        if (seq[2] == '~') {
+          switch (seq[1]) {
+            case '1': return HOME_KEY;
+            case '3': return DEL_KEY;
+            case '4': return END_KEY;
+            case '5': return PAGE_UP;
+            case '6': return PAGE_DOWN;
+            case '7': return HOME_KEY;
+            case '8': return END_KEY;
+          }
+        }
+      } else {
+        switch (seq[1]) {
+          case 'A': return ARROW_UP;
+          case 'B': return ARROW_DOWN;
+          case 'C': return ARROW_RIGHT;
+          case 'D': return ARROW_LEFT;
+          case 'H': return HOME_KEY;
+          case 'F': return END_KEY;
+        }
+      }
+    } else if (seq[0] == 'O') {
+      switch (seq[1]) {
+        case 'H': return HOME_KEY;
+        case 'F': return END_KEY;
+      }
+    }
+
+    return '\x1b';
+  } else {
+    return c;
+  }
+}
+
+void editorMoveCursor(int key) {
+  switch(key) {
+    case ARROW_LEFT:
+      if(E.PT->rowX != 0) {
+        E.PT->rowX--;
+        E.PT->location--;
+      }
+      break;
+    case ARROW_RIGHT:
+      if(E.PT->rowX < E.PT->current->len) {
+        E.PT->rowX++;
+        E.PT->location++;
+      }
+      break;
+    case ARROW_UP:
+      if(E.PT->rowY != 0) {
+        E.PT->rowY--;
+        if(E.PT->current->prev->len <= E.PT->rowX) {
+          E.PT->location = E.PT->location - E.PT->current->len;
+          E.PT->rowX = E.PT->current->prev->len;
+        }
+        else {
+          E.PT->location = E.PT->location - E.PT->current->prev->len;
+        }
+        E.PT->current = E.PT->current->prev;
+      }
+      break;
+    case ARROW_DOWN:
+      if(E.PT->current->next) {
+        E.PT->rowY++;
+        if(E.PT->current->next->len <= E.PT->rowX) {
+          E.PT->location = E.PT->location + E.PT->current->next->len;
+          E.PT->rowX = E.PT->current->next->len;
+        }
+        else {
+          E.PT->location = E.PT->location + E.PT->current->len;
+        }
+        E.PT->current = E.PT->current->next;
+      }
+      break;
+  }
+}
+
+void editorProcessKeypress() {
+  static int quit_times = KI_QUIT_TIMES;
+  int c = editorReadKey();
+
+  switch (c) {
+    case ARROW_UP:
+    case ARROW_DOWN:
+    case ARROW_LEFT:
+    case ARROW_RIGHT:
+      editorMoveCursor(c);
+      return;
+      break;
+  }
+}
+
 int main(int argc, char *argv[]) {
-    //NOTE: when displaying text, \n will not get written as \r\n so we will need to handle that
-    //      when displaying, look at test.c
     //      might be an off by one error in pos for delete (easily handled)
-    //TODO: Port keyboard event loop
+    // TODO: Port keyboard event loop
     
     enableRawMode();
   	initEditor();
@@ -756,23 +932,14 @@ int main(int argc, char *argv[]) {
 		  E.PT = initPieceTable(argv[1]);
 
     insertChar(6, 'A', &(E.PT));
-    insertChar(7, 'A', &(E.PT));
-    insertChar(8, 'A', &(E.PT));
-    inOrderTraversal(E.PT->root);
-    deleteChar(7, &(E.PT));
-    inOrderTraversal(E.PT->root);
+    insertChar(7, 'B', &(E.PT));
+    insertChar(8, 'C', &(E.PT));
+
+    while(1) {
+      editorRefreshScreen();
+      editorProcessKeypress();
+    }
     
-    abuf ab = ABUF_INIT;
-    abAppend(&ab, "\x1b[?25l", 6);
-    abAppend(&ab, "\x1b[H", 3);
-    abAppend(&ab, E.PT->original, E.PT->max_location);
-    abAppend(&ab, "\x1b[K", 3);
-    abAppend(&ab, "\r\n", 2);
-    abAppend(&ab, "\x1b[H", 3);
-    abAppend(&ab, "\x1b[?25h", 6);
-
-    write(STDOUT_FILENO, ab.b, ab.len);
-
 
   return 0;
 }
