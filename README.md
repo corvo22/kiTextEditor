@@ -1,1 +1,1 @@
-# kiTextEditor
+# kyeTextEditor
